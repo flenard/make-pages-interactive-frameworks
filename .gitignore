@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Local feedback runtime (created in target projects, never in this repo)
+feedback/inbox.jsonl
+feedback/history.json
+feedback/lastseen.json
