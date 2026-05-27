@@ -5,6 +5,8 @@ Highlight text, click an element, or drop a note — the comment lands in a loca
 inbox that Claude reads and responds to by editing the **source**. The page
 reloads with a walkthrough of what changed.
 
+![make-pages-interactive-frameworks in action: a live site with the in-page feedback panel open, leaving a comment that Claude turns into a source edit](screenshot.webp)
+
 > **This is a fork of [paraschopra/make-pages-interactive](https://github.com/paraschopra/make-pages-interactive).**
 > The original works on a folder of plain static HTML (it assumes the file you
 > *view* is the file you *edit*). This fork adds **framework mode** so it also
