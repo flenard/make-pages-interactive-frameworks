@@ -32,6 +32,24 @@ protocol, the auto-shutting-down server — is from the original.
 
 ---
 
+## Recent updates
+
+Element-picker improvements on top of framework mode:
+
+- **Selectable HTML5 landmarks** — `<footer>`, `<header>`, `<nav>`, `<aside>`,
+  and `<main>` are now recognised by the picker. Before this, clicking a landmark
+  that had no `id` or whitelisted class walked up to `<body>` and selected
+  nothing — so footers and nav bars simply couldn't be commented on. Added to
+  `COMMENTABLE_TAGS` in [`lib/feedback.js`](lib/feedback.js).
+- **Selectable layout containers** — common grid/row wrappers (`three-col`,
+  `two-col`, `matrix`, `metrics`, `stats`, `row-list`, `chips`) are now
+  commentable, so you can select a whole grid or row as a single unit instead of
+  only its child cards. Click a container's gap/padding (not a card) to select it.
+  Extend the list in `COMMENTABLE_CLASSES` ([`lib/feedback.js`](lib/feedback.js))
+  for your own layout class names.
+
+---
+
 ## How it works
 
 **Static mode** (plain HTML) — identical to upstream:
