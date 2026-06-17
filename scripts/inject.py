@@ -101,11 +101,20 @@ def ensure_project_id(root: Path) -> str:
 
 def resolve_token(root: Path, cli_token: str) -> str:
     """Token precedence: --token wins (and is persisted); else reuse an existing
-    feedback/.cf-token; else none. Shared with server.py via the same marker."""
+    feedback/.cf-token; else none. Shared with server.py via the same marker.
+    The marker is a credential, so it's written owner-only (0600)."""
     marker = root / "feedback" / ".cf-token"
     if cli_token:
         marker.parent.mkdir(exist_ok=True)
-        marker.write_text(cli_token + "\n", encoding="utf-8")
+        # O_CREAT with 0600 so the secret is never briefly world-readable; chmod
+        # too in case the file already existed with looser perms.
+        fd = os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cli_token + "\n")
+        try:
+            os.chmod(marker, 0o600)
+        except OSError:
+            pass
         return cli_token
     return _safe_read(marker).strip()
 

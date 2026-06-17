@@ -52,6 +52,7 @@ def _mutate_registry(fn) -> None:
             reg = fn(reg)
             tmp = REGISTRY_PATH.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(reg, indent=2))
+            os.chmod(tmp, 0o600)  # holds dirs/pids/ports — keep owner-only
             tmp.replace(REGISTRY_PATH)
             fcntl.flock(lock, fcntl.LOCK_UN)
     except Exception:
@@ -382,6 +383,10 @@ def main():
     if not token:
         tok_marker = feedback_dir / ".cf-token"
         if tok_marker.exists():
+            try:
+                os.chmod(tok_marker, 0o600)  # credential: keep owner-only
+            except OSError:
+                pass
             token = tok_marker.read_text(encoding="utf-8").strip()
 
     FeedbackHandler.feedback_dir = feedback_dir
