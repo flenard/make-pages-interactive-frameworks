@@ -34,6 +34,60 @@ protocol, the auto-shutting-down server — is from the original.
 
 ## Recent updates
 
+### v1.4.0 — back-channel notes, quick reactions & clean teardown (2026-06-17)
+
+- **Agent → page notes.** The agent can write `feedback/notes.json` (info /
+  question / blocked); the page polls it and surfaces the note in the panel. The
+  loop is now two-way — *"can't do that, it's a build asset"* or *"the header or
+  the hero?"* reaches you instead of a silent skip.
+- **Quick-reaction chips.** The comment editor offers one-tap chips ("too big",
+  "wrong colour", "tighten spacing", …) that append to your note, so common
+  feedback is a click, not retyping.
+- **Agent-side screenshots.** SKILL.md now directs the agent to open the page and
+  screenshot the commented element for visual feedback — editing against what you
+  actually see, not just markup.
+- **Complete teardown.** `inject.py --remove` now also stops this project's
+  sidecar and drops its registry row (via `~/.claude/cf-registry.json`) — one
+  clean undo of tags + server + registry.
+
+### v1.3.0 — reversible edits, conversation & durable anchors (2026-06-17)
+
+- **Revert-by-click.** The agent commits each applied batch to git and records
+  the SHA in `history.json`; the History tab then shows a **⏪ revert** button
+  that asks the agent to `git revert` it. Feedback becomes a safe, undoable
+  experiment instead of a one-way edit.
+- **Reply on a change.** Each History item has a **↳ reply** button that threads
+  a follow-up to that exact change (`in_reply_to`), so *"almost — make it darker"*
+  reaches the agent as feedback on the edit it just made, not a context-free
+  request. The comment loop is now an actual conversation.
+- **Durable anchors.** Element ids are now content-derived (tag + text hash)
+  instead of positional (`el-1`, `el-2`…), so comments and change markers survive
+  reloads and DOM reordering — directly attacking the "anchor not found after
+  reload" failure mode.
+- **Viewport context.** Every batch reports `{width, height, label}` (mobile /
+  tablet / desktop), so a layout complaint tells the agent *which breakpoint*.
+
+### v1.2.0 — localhost-by-default, auth, registry & richer comments (2026-06-17)
+
+- **Binds `127.0.0.1` by default.** The sidecar previously listened on all
+  interfaces with no auth — anyone on your network could POST feedback (which
+  drives source edits). Now localhost-only unless you opt in with
+  `--host 0.0.0.0`, and that path warns loudly without a token.
+- **Optional shared-secret token.** `server.py --token <secret>` (or
+  `inject.py --token <secret>`, persisted to `feedback/.cf-token`) requires
+  `X-CF-Token` on every POST — `401` otherwise. For when you *do* expose it
+  (phone testing, LAN).
+- **Live-sidecar registry.** Every server records itself in
+  `~/.claude/cf-registry.json`; `python lib/server.py --list` shows every wired
+  project (id, port, dir, pid) across sessions. Lock-guarded against concurrent
+  writes, self-heals dead entries, cleans up on `SIGTERM`/exit.
+- **`--auto-port`.** If the requested port is taken, bind the next free one
+  (static mode — framework pages bake the port into `data-cf-api`).
+- **Comments now carry computed styles.** Element comments include a small slice
+  of the rendered styling (`font-size`, `color`, `width/height`, spacing, …) so
+  the agent can act on visual feedback ("too big", "wrong colour") without
+  guessing from markup.
+
 ### v1.1.0 — per-project routing & generalized selection (2026-06-17)
 
 Fixes the "feedback lands in the wrong Claude session" problem when several
