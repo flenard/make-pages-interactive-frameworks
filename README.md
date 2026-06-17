@@ -32,6 +32,43 @@ protocol, the auto-shutting-down server — is from the original.
 
 ---
 
+## Recent updates
+
+### v1.1.0 — per-project routing & richer selection (2026-06-17)
+
+Fixes the "feedback lands in the wrong Claude session" problem when several
+projects run at once, plus makes more of the page selectable.
+
+- **Per-project identity, verified end-to-end.** Each project gets a stable id
+  (`feedback/.cf-project`, derived from its path) that `inject.py` stamps into the
+  page as `data-cf-project`. `feedback.js` sends it on every batch (the
+  `X-CF-Project` header + in the body), and `server.py` **rejects a mismatched
+  batch with HTTP 409** instead of appending it. A page pointed at the wrong port
+  now shows an actionable toast — *"this page is X but :PORT serves Y"* — and
+  keeps your pending comments, instead of silently dropping them in another
+  session's inbox.
+- **`/info` now reports `project_id`**, so a session can confirm the inbox it
+  monitors matches the page it's looking at.
+- **More blocks are selectable.** Element-selection mode now accepts common
+  containers (`div`, `main`, `header`, `footer`, `nav`, `aside`, `section`,
+  `form`, …) and any element carrying a class — generic wrapper blocks no longer
+  fall through to the wrong ancestor.
+- **Multi-project guidance.** `inject.py` warns when projects share the default
+  `:5050`, and `SKILL.md` documents the one-port-per-project rule.
+- Batches now send the full `page_url` (`location.href`) rather than just the path.
+
+Backwards compatible: a page with no project id (plain static / older inject)
+still posts and is accepted as before.
+
+### v1.0.0 — initial fork (2026-05-27)
+
+- **Framework mode** for Eleventy / Astro / Next.js: one dev-gated block injected
+  into the base layout, `server.py` running as a CORS sidecar API, client API base
+  read from `data-cf-api`.
+- LICENSE copyright lines cleaned for SPDX detection; README screenshot added.
+
+---
+
 ## How it works
 
 **Static mode** (plain HTML) — identical to upstream:
@@ -150,9 +187,9 @@ make-pages-interactive-frameworks/
 ├── README.md         # this file
 ├── LICENSE           # MIT (Paras Chopra + framework-mode modifications)
 ├── lib/
-│   ├── feedback.js   # client library; API base read from data-cf-api (forked)
+│   ├── feedback.js   # client library; data-cf-api + data-cf-project (forked)
 │   ├── feedback.css  # comment UI styles (upstream)
-│   └── server.py     # stdlib HTTP server / CORS sidecar API (upstream)
+│   └── server.py     # stdlib HTTP server / CORS sidecar + project-id guard (forked)
 └── scripts/
     ├── inject.py     # framework-aware inject/remove (forked)
     └── update.py     # fork notice (no upstream auto-pull)
