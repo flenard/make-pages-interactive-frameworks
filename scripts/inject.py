@@ -26,6 +26,7 @@ Usage:
                           [--remove] [--recursive]
 """
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -33,9 +34,43 @@ from pathlib import Path
 DEFAULT_API = "http://localhost:5050"
 BLOCK_MARK = "cf-feedback-dev"  # inner anchor for idempotency + removal
 
+
+# ---------- project identity ----------
+# A stable id per project so a page POSTing feedback can be matched to the right
+# server/inbox/session. When several projects run at once (each its own port and
+# Claude session), this turns a silent cross-wire into a loud 409 instead of
+# feedback landing in the wrong session's inbox. Persisted to feedback/.cf-project
+# so the id survives across re-injects and is shared with server.py.
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s or "project"
+
+
+def project_id(root: Path) -> str:
+    marker = root / "feedback" / ".cf-project"
+    existing = _safe_read(marker).strip()
+    if existing:
+        return existing
+    digest = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:6]
+    return f"{_slugify(root.name)}-{digest}"
+
+
+def ensure_project_id(root: Path) -> str:
+    """Return the project id, writing feedback/.cf-project if absent."""
+    pid = project_id(root)
+    marker = root / "feedback" / ".cf-project"
+    marker.parent.mkdir(exist_ok=True)
+    if not marker.exists():
+        marker.write_text(pid + "\n", encoding="utf-8")
+    return pid
+
+
 # ---------- static-mode tags (same-origin; server.py serves /lib + /feedback) ----------
 CSS_TAG = '<link rel="stylesheet" href="/lib/feedback.css">'
-JS_TAG = '<script src="/lib/feedback.js" defer data-cf-api=""></script>'
+
+def js_tag(api: str, pid: str) -> str:
+    return f'<script src="/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"></script>'
+
 CSS_MARKER = "/lib/feedback.css"
 JS_MARKER = "/lib/feedback.js"
 
@@ -47,30 +82,30 @@ JS_REMOVE_RE = re.compile(
 )
 
 # ---------- framework block builders (dev-gated) ----------
-def block_eleventy(api: str) -> str:
+def block_eleventy(api: str, pid: str) -> str:
     return (
         f'{{% if eleventy.env.runMode == "serve" %}}<!-- {BLOCK_MARK} -->\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css">\n'
-        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}"></script>\n'
+        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"></script>\n'
         f'  <!-- /{BLOCK_MARK} -->{{% endif %}}\n'
     )
 
 
-def block_astro(api: str) -> str:
+def block_astro(api: str, pid: str) -> str:
     return (
         f'{{import.meta.env.DEV && (<>{{/* {BLOCK_MARK} */}}\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css" />\n'
-        f'  <script is:inline defer src="{api}/lib/feedback.js" data-cf-api="{api}"></script>\n'
+        f'  <script is:inline defer src="{api}/lib/feedback.js" data-cf-api="{api}" data-cf-project="{pid}"></script>\n'
         f'</>)}}\n'
     )
 
 
-def block_next(api: str) -> str:
+def block_next(api: str, pid: str) -> str:
     return (
         f'{{process.env.NODE_ENV === "development" && (<>{{/* {BLOCK_MARK} */}}\n'
         f'  {{/* eslint-disable-next-line @next/next/no-sync-scripts */}}\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css" />\n'
-        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" />\n'
+        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}" />\n'
         f'</>)}}\n'
     )
 
@@ -150,7 +185,7 @@ def _safe_read(p: Path) -> str:
 
 
 # ---------- static injection (per *.html file) ----------
-def inject_static_one(path: Path) -> str:
+def inject_static_one(path: Path, pid: str) -> str:
     text = path.read_text(encoding="utf-8")
     changed = False
     notes = []
@@ -164,7 +199,8 @@ def inject_static_one(path: Path) -> str:
             notes.append("no </head>")
     if not js_present:
         if "</body>" in text:
-            text = text.replace("</body>", f"  {JS_TAG}\n</body>", 1)
+            # static mode is same-origin → empty data-cf-api
+            text = text.replace("</body>", f"  {js_tag('', pid)}\n</body>", 1)
             changed = True
         else:
             notes.append("no </body>")
@@ -197,13 +233,13 @@ def find_html(root: Path, recursive: bool) -> list[Path]:
 
 
 # ---------- framework injection (single base layout) ----------
-def inject_framework(layout: Path, framework: str, api: str) -> str:
+def inject_framework(layout: Path, framework: str, api: str, pid: str) -> str:
     text = layout.read_text(encoding="utf-8")
     if BLOCK_MARK in text:
         return "skipped (already wired)"
     if "</body>" not in text:
         return "skipped (no </body> in layout)"
-    block = BLOCK_BUILD[framework](api)
+    block = BLOCK_BUILD[framework](api, pid)
     text = text.replace("</body>", block + "</body>", 1)
     layout.write_text(text, encoding="utf-8")
     return "injected"
@@ -232,7 +268,7 @@ def ensure_feedback_dir(root: Path) -> None:
 
 def ensure_gitignore(root: Path) -> None:
     gi = root / ".gitignore"
-    entry = "\n# make-pages-interactive (local feedback runtime)\nfeedback/inbox.jsonl\nfeedback/history.json\nfeedback/lastseen.json\n"
+    entry = "\n# make-pages-interactive (local feedback runtime)\nfeedback/inbox.jsonl\nfeedback/history.json\nfeedback/lastseen.json\nfeedback/.cf-project\n"
     existing = _safe_read(gi)
     if "make-pages-interactive" in existing or "feedback/inbox.jsonl" in existing:
         return
@@ -265,16 +301,21 @@ def main() -> int:
             print(f"No *.html files found in {root} (and not a detected framework).")
             print("If this is an Eleventy/Astro/Next project, pass --framework or run from its root.")
             return 0
-        action = remove_static_one if args.remove else inject_static_one
         verb = "Removing tags from" if args.remove else "Injecting tags into"
         print(f"[static] {verb} {len(htmls)} file(s) under {root}:")
+        if args.remove:
+            for p in htmls:
+                print(f"  {p.relative_to(root)}: {remove_static_one(p)}")
+            return 0
+        ensure_feedback_dir(root)
+        pid = ensure_project_id(root)
         for p in htmls:
-            print(f"  {p.relative_to(root)}: {action(p)}")
-        if not args.remove:
-            ensure_feedback_dir(root)
-            ensure_gitignore(root)
-            print(f"\nFeedback dir ready: {root / 'feedback'}")
-            print(f"Next: python lib/server.py {root} --port 5050   (serves pages + feedback API)")
+            print(f"  {p.relative_to(root)}: {inject_static_one(p, pid)}")
+        ensure_gitignore(root)
+        print(f"\nFeedback dir ready: {root / 'feedback'}")
+        print(f"Project id: {pid}")
+        print(f"Next: python lib/server.py {root} --port 5050   (serves pages + feedback API)")
+        print("Running several projects at once? Give each its own --port.")
         return 0
 
     # ---------------- FRAMEWORK ----------------
@@ -304,15 +345,23 @@ def main() -> int:
         print(f"[{framework}] {layout.relative_to(root)}: {status}")
         return 0
 
-    status = inject_framework(layout, framework, api)
-    print(f"[{framework}] {layout.relative_to(root)}: {status}")
     ensure_feedback_dir(root)
+    pid = ensure_project_id(root)
+    status = inject_framework(layout, framework, api, pid)
+    print(f"[{framework}] {layout.relative_to(root)}: {status}")
     ensure_gitignore(root)
+    sidecar_port = api.rsplit(":", 1)[-1] if ":" in api else "5050"
     print(f"\nFeedback dir ready: {root / 'feedback'}")
+    print(f"Project id: {pid}")
     print("Dev-gated block injected — it will NOT appear in production builds.")
+    if api == DEFAULT_API:
+        print(f"\n⚠  Using the default sidecar {DEFAULT_API}. Running several projects")
+        print(f"   at once? Each needs its OWN port, or they collide on {sidecar_port} and")
+        print(f"   feedback lands in the wrong session. Re-run with e.g.:")
+        print(f"     python inject.py {root} --api http://localhost:5051")
     print("Next, run BOTH:")
     print(f"  1. your framework dev server (it serves + live-reloads the pages)")
-    print(f"  2. python lib/server.py {root} --port {api.rsplit(':', 1)[-1] if ':' in api else '5050'}   (feedback API sidecar)")
+    print(f"  2. python lib/server.py {root} --port {sidecar_port}   (feedback API sidecar)")
     print(f"Then open the framework dev-server URL (NOT the sidecar port).")
     return 0
 

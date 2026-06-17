@@ -69,6 +69,7 @@ def _with_charset(content_type: str) -> str:
 class FeedbackHandler(http.server.SimpleHTTPRequestHandler):
     feedback_dir: Path = None  # type: ignore
     artifact_dir: Path = None  # type: ignore
+    project_id: str = ""       # type: ignore
 
     # ---------- override caching: dev server should never cache ----------
     def end_headers(self):
@@ -101,6 +102,7 @@ class FeedbackHandler(http.server.SimpleHTTPRequestHandler):
                 "feedback_dir": str(self.feedback_dir),
                 "lib_dir": str(LIB_DIR),
                 "port": self.server.server_address[1],
+                "project_id": self.project_id,
             }
             self._json(200, info)
             return
@@ -139,6 +141,25 @@ class FeedbackHandler(http.server.SimpleHTTPRequestHandler):
                 data = json.loads(body)
             except json.JSONDecodeError:
                 self._json(400, {"ok": False, "error": "invalid json"})
+                return
+            # Reject feedback wired to a different project so a cross-wired page
+            # (e.g. data-cf-api pointing at the wrong port) fails loudly instead
+            # of silently landing in this session's inbox. A post with no id is
+            # an older/static page → accept for back-compat.
+            posted_id = self.headers.get("X-CF-Project") or data.get("project") or ""
+            if self.project_id and posted_id and posted_id != self.project_id:
+                sys.stdout.write(
+                    f"[feedback] REJECTED project mismatch: page='{posted_id}' "
+                    f"server='{self.project_id}'\n"
+                )
+                sys.stdout.flush()
+                self._json(409, {
+                    "ok": False,
+                    "error": "project mismatch",
+                    "expected": self.project_id,
+                    "got": posted_id,
+                    "port": self.server.server_address[1],
+                })
                 return
             data["received_at"] = time.time()
             data["received_iso"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -221,8 +242,21 @@ def main():
     if not history.exists():
         history.write_text("[]")
 
+    # Project id: shared with inject.py via feedback/.cf-project. Derived
+    # deterministically from the artifact path if the marker is absent, so the
+    # server and the injected page agree even if inject.py ran on another run.
+    marker = feedback_dir / ".cf-project"
+    if marker.exists():
+        project_id = marker.read_text(encoding="utf-8").strip()
+    else:
+        import hashlib, re
+        slug = re.sub(r"[^a-z0-9]+", "-", artifact_dir.name.lower()).strip("-") or "project"
+        project_id = f"{slug}-{hashlib.sha1(str(artifact_dir).encode()).hexdigest()[:6]}"
+        marker.write_text(project_id + "\n", encoding="utf-8")
+
     FeedbackHandler.feedback_dir = feedback_dir
     FeedbackHandler.artifact_dir = artifact_dir
+    FeedbackHandler.project_id = project_id
 
     os.chdir(artifact_dir)
 
@@ -249,6 +283,7 @@ def main():
 
     with srv:
         print(f"[server] serving {artifact_dir}")
+        print(f"[server] project: {project_id}")
         print(f"[server] open http://localhost:{args.port}/sample.html")
         print(f"[server] inbox:   {inbox}")
         print(f"[server] history: {history}")

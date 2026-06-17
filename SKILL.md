@@ -54,6 +54,14 @@ and the page reloads with a walkthrough of what changed.
    - JSON with `artifact_dir` matching this `<dir>` → reuse, skip to 5.
    - JSON with a *different* `artifact_dir` → port taken; use 5051/5052… (and pass `--api http://localhost:<port>` to inject.py so the tags match).
    - No response → 5050 is free.
+
+   **One port per project.** Each project gets a stable `project_id` (printed by
+   inject.py, stored in `feedback/.cf-project`, and shown on `/info`). The page is
+   stamped with `data-cf-project`; the server rejects any batch whose id doesn't
+   match (HTTP 409), so a mis-pointed `data-cf-api` fails loudly instead of
+   landing in the wrong session's inbox. When running several projects at once,
+   give each its own port and confirm `/info`'s `project_id` matches the page —
+   never share 5050 across projects.
 4. **Start the sidecar** via Bash with `run_in_background: true`:
    ```
    python ~/.claude/skills/make-pages-interactive/lib/server.py <dir> --port <chosen>
@@ -128,7 +136,7 @@ Leaves `feedback/` alone (delete manually if unwanted). Note the framework block
 ├── lib/
 │   ├── feedback.js   # client lib; API base read from data-cf-api (forked)
 │   ├── feedback.css
-│   └── server.py     # stdlib HTTP server / sidecar API (unchanged, CORS-enabled)
+│   └── server.py     # stdlib HTTP server / sidecar API (CORS, project-id guard)
 └── scripts/
     ├── inject.py     # framework-aware inject/remove (forked)
     └── update.py     # fork notice (no auto-update)
@@ -137,6 +145,7 @@ Leaves `feedback/` alone (delete manually if unwanted). Note the framework block
 ## Gotchas
 
 - **Framework mode = run BOTH servers.** Framework dev server renders pages; Python sidecar handles feedback I/O. Send the user to the **framework** URL.
+- **Multiple projects at once → one port + one project_id each.** If the user reports feedback reaching the "wrong session," it's almost always two projects sharing port 5050. Give each its own `--port` / `--api`; the `project_id` mismatch guard (409) will surface any remaining cross-wire as a toast on the page telling them which port to fix.
 - The widget loads from `<api>/lib/feedback.js` and talks to `<api>/feedback`. The sidecar sends `Access-Control-Allow-Origin: *`, so cross-port works. If the widget never appears in framework mode: the sidecar isn't running, or `--api` didn't match the sidecar port.
 - The injected framework block is **dev-gated** (`eleventy.env.runMode == "serve"` / `import.meta.env.DEV` / `process.env.NODE_ENV === "development"`) — it is absent from production builds by construction.
 - Edit **source**, never build output (`_site`, `dist`, `.next`). Editing output is wiped on the next build.
