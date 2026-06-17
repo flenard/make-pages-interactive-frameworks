@@ -34,10 +34,10 @@ protocol, the auto-shutting-down server — is from the original.
 
 ## Recent updates
 
-### v1.1.0 — per-project routing & richer selection (2026-06-17)
+### v1.1.0 — per-project routing & generalized selection (2026-06-17)
 
 Fixes the "feedback lands in the wrong Claude session" problem when several
-projects run at once, plus makes more of the page selectable.
+projects run at once, and generalizes the element picker.
 
 - **Per-project identity, verified end-to-end.** Each project gets a stable id
   (`feedback/.cf-project`, derived from its path) that `inject.py` stamps into the
@@ -49,16 +49,27 @@ projects run at once, plus makes more of the page selectable.
   session's inbox.
 - **`/info` now reports `project_id`**, so a session can confirm the inbox it
   monitors matches the page it's looking at.
-- **More blocks are selectable.** Element-selection mode now accepts common
-  containers (`div`, `main`, `header`, `footer`, `nav`, `aside`, `section`,
-  `form`, …) and any element carrying a class — generic wrapper blocks no longer
-  fall through to the wrong ancestor.
+- **Selection generalized.** Element-selection mode now accepts common containers
+  (`div`, `main`, `header`, `footer`, `nav`, `aside`, `section`, `form`, …) and
+  **any element carrying a class** — superseding the v1.0.1 landmark + named-grid
+  lists with a single any-class rule, so arbitrary wrapper blocks no longer fall
+  through to the wrong ancestor.
 - **Multi-project guidance.** `inject.py` warns when projects share the default
   `:5050`, and `SKILL.md` documents the one-port-per-project rule.
 - Batches now send the full `page_url` (`location.href`) rather than just the path.
 
 Backwards compatible: a page with no project id (plain static / older inject)
 still posts and is accepted as before.
+
+### v1.0.1 — selectable landmarks & layout containers (2026-06-15)
+
+- **Selectable HTML5 landmarks** — `<footer>`, `<header>`, `<nav>`, `<aside>`,
+  and `<main>` recognised by the picker (previously they walked up to `<body>`
+  and selected nothing).
+- **Selectable layout containers** — common grid/row wrappers (`three-col`,
+  `two-col`, `matrix`, `metrics`, `stats`, `row-list`, `chips`) became
+  commentable, so a whole grid/row could be selected as one unit. (v1.1.0
+  replaces this named list with a general any-class rule.)
 
 ### v1.0.0 — initial fork (2026-05-27)
 
