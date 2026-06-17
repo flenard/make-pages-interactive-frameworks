@@ -27,12 +27,46 @@ Usage:
 """
 import argparse
 import hashlib
+import json
+import os
 import re
+import signal
 import sys
 from pathlib import Path
 
 DEFAULT_API = "http://localhost:5050"
 BLOCK_MARK = "cf-feedback-dev"  # inner anchor for idempotency + removal
+REGISTRY_PATH = Path.home() / ".claude" / "cf-registry.json"
+
+
+def stop_sidecar(root: Path) -> None:
+    """Teardown helper: stop any live sidecar serving this project and drop its
+    registry row, so --remove fully undoes the setup (tags + server + registry).
+    Best-effort — never fatal."""
+    try:
+        reg = json.loads(REGISTRY_PATH.read_text())
+    except Exception:
+        return
+    target = str(root.resolve())
+    stopped = []
+    for port, entry in list(reg.items()):
+        if entry.get("dir") == target:
+            pid = entry.get("pid")
+            try:
+                if pid:
+                    os.kill(int(pid), signal.SIGTERM)  # server self-removes its row on SIGTERM
+                    stopped.append(f":{port} (pid {pid})")
+            except ProcessLookupError:
+                pass  # already gone
+            except Exception:
+                continue
+            reg.pop(port, None)
+    if stopped:
+        try:
+            REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+        except Exception:
+            pass
+        print(f"[teardown] stopped sidecar(s): {', '.join(stopped)}")
 
 
 # ---------- project identity ----------
@@ -65,11 +99,27 @@ def ensure_project_id(root: Path) -> str:
     return pid
 
 
+def resolve_token(root: Path, cli_token: str) -> str:
+    """Token precedence: --token wins (and is persisted); else reuse an existing
+    feedback/.cf-token; else none. Shared with server.py via the same marker."""
+    marker = root / "feedback" / ".cf-token"
+    if cli_token:
+        marker.parent.mkdir(exist_ok=True)
+        marker.write_text(cli_token + "\n", encoding="utf-8")
+        return cli_token
+    return _safe_read(marker).strip()
+
+
 # ---------- static-mode tags (same-origin; server.py serves /lib + /feedback) ----------
 CSS_TAG = '<link rel="stylesheet" href="/lib/feedback.css">'
 
-def js_tag(api: str, pid: str) -> str:
-    return f'<script src="/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"></script>'
+def _tok_attr(token: str) -> str:
+    # Only emit data-cf-token when a token is actually set, so localhost-only
+    # pages stay clean.
+    return f' data-cf-token="{token}"' if token else ""
+
+def js_tag(api: str, pid: str, token: str = "") -> str:
+    return f'<script src="/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"{_tok_attr(token)}></script>'
 
 CSS_MARKER = "/lib/feedback.css"
 JS_MARKER = "/lib/feedback.js"
@@ -82,30 +132,30 @@ JS_REMOVE_RE = re.compile(
 )
 
 # ---------- framework block builders (dev-gated) ----------
-def block_eleventy(api: str, pid: str) -> str:
+def block_eleventy(api: str, pid: str, token: str = "") -> str:
     return (
         f'{{% if eleventy.env.runMode == "serve" %}}<!-- {BLOCK_MARK} -->\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css">\n'
-        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"></script>\n'
+        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"{_tok_attr(token)}></script>\n'
         f'  <!-- /{BLOCK_MARK} -->{{% endif %}}\n'
     )
 
 
-def block_astro(api: str, pid: str) -> str:
+def block_astro(api: str, pid: str, token: str = "") -> str:
     return (
         f'{{import.meta.env.DEV && (<>{{/* {BLOCK_MARK} */}}\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css" />\n'
-        f'  <script is:inline defer src="{api}/lib/feedback.js" data-cf-api="{api}" data-cf-project="{pid}"></script>\n'
+        f'  <script is:inline defer src="{api}/lib/feedback.js" data-cf-api="{api}" data-cf-project="{pid}"{_tok_attr(token)}></script>\n'
         f'</>)}}\n'
     )
 
 
-def block_next(api: str, pid: str) -> str:
+def block_next(api: str, pid: str, token: str = "") -> str:
     return (
         f'{{process.env.NODE_ENV === "development" && (<>{{/* {BLOCK_MARK} */}}\n'
         f'  {{/* eslint-disable-next-line @next/next/no-sync-scripts */}}\n'
         f'  <link rel="stylesheet" href="{api}/lib/feedback.css" />\n'
-        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}" />\n'
+        f'  <script src="{api}/lib/feedback.js" defer data-cf-api="{api}" data-cf-project="{pid}"{_tok_attr(token)} />\n'
         f'</>)}}\n'
     )
 
@@ -185,7 +235,7 @@ def _safe_read(p: Path) -> str:
 
 
 # ---------- static injection (per *.html file) ----------
-def inject_static_one(path: Path, pid: str) -> str:
+def inject_static_one(path: Path, pid: str, token: str = "") -> str:
     text = path.read_text(encoding="utf-8")
     changed = False
     notes = []
@@ -200,7 +250,7 @@ def inject_static_one(path: Path, pid: str) -> str:
     if not js_present:
         if "</body>" in text:
             # static mode is same-origin → empty data-cf-api
-            text = text.replace("</body>", f"  {js_tag('', pid)}\n</body>", 1)
+            text = text.replace("</body>", f"  {js_tag('', pid, token)}\n</body>", 1)
             changed = True
         else:
             notes.append("no </body>")
@@ -233,13 +283,13 @@ def find_html(root: Path, recursive: bool) -> list[Path]:
 
 
 # ---------- framework injection (single base layout) ----------
-def inject_framework(layout: Path, framework: str, api: str, pid: str) -> str:
+def inject_framework(layout: Path, framework: str, api: str, pid: str, token: str = "") -> str:
     text = layout.read_text(encoding="utf-8")
     if BLOCK_MARK in text:
         return "skipped (already wired)"
     if "</body>" not in text:
         return "skipped (no </body> in layout)"
-    block = BLOCK_BUILD[framework](api, pid)
+    block = BLOCK_BUILD[framework](api, pid, token)
     text = text.replace("</body>", block + "</body>", 1)
     layout.write_text(text, encoding="utf-8")
     return "injected"
@@ -264,11 +314,14 @@ def ensure_feedback_dir(root: Path) -> None:
     history = fb / "history.json"
     if not history.exists():
         history.write_text("[]")
+    notes = fb / "notes.json"
+    if not notes.exists():
+        notes.write_text("[]")
 
 
 def ensure_gitignore(root: Path) -> None:
     gi = root / ".gitignore"
-    entry = "\n# make-pages-interactive (local feedback runtime)\nfeedback/inbox.jsonl\nfeedback/history.json\nfeedback/lastseen.json\nfeedback/.cf-project\n"
+    entry = "\n# make-pages-interactive (local feedback runtime)\nfeedback/inbox.jsonl\nfeedback/history.json\nfeedback/notes.json\nfeedback/lastseen.json\nfeedback/.cf-project\nfeedback/.cf-token\n"
     existing = _safe_read(gi)
     if "make-pages-interactive" in existing or "feedback/inbox.jsonl" in existing:
         return
@@ -281,6 +334,7 @@ def main() -> int:
     ap.add_argument("dir", help="project / artifact directory")
     ap.add_argument("--framework", choices=["auto", "static", "eleventy", "astro", "next"], default="auto")
     ap.add_argument("--api", default=DEFAULT_API, help=f"sidecar API base for framework mode (default {DEFAULT_API})")
+    ap.add_argument("--token", default="", help="shared secret stamped as data-cf-token (use when the server is exposed beyond localhost). Persisted to feedback/.cf-token.")
     ap.add_argument("--layout", help="explicit base-layout path (override auto-detect)")
     ap.add_argument("--remove", action="store_true", help="strip the tags/block instead of injecting")
     ap.add_argument("--recursive", "-r", action="store_true", help="(static mode) walk subdirectories")
@@ -306,11 +360,13 @@ def main() -> int:
         if args.remove:
             for p in htmls:
                 print(f"  {p.relative_to(root)}: {remove_static_one(p)}")
+            stop_sidecar(root)
             return 0
         ensure_feedback_dir(root)
         pid = ensure_project_id(root)
+        token = resolve_token(root, args.token)
         for p in htmls:
-            print(f"  {p.relative_to(root)}: {inject_static_one(p, pid)}")
+            print(f"  {p.relative_to(root)}: {inject_static_one(p, pid, token)}")
         ensure_gitignore(root)
         print(f"\nFeedback dir ready: {root / 'feedback'}")
         print(f"Project id: {pid}")
@@ -343,11 +399,13 @@ def main() -> int:
     if args.remove:
         status = remove_framework(layout, framework)
         print(f"[{framework}] {layout.relative_to(root)}: {status}")
+        stop_sidecar(root)
         return 0
 
     ensure_feedback_dir(root)
     pid = ensure_project_id(root)
-    status = inject_framework(layout, framework, api, pid)
+    token = resolve_token(root, args.token)
+    status = inject_framework(layout, framework, api, pid, token)
     print(f"[{framework}] {layout.relative_to(root)}: {status}")
     ensure_gitignore(root)
     sidecar_port = api.rsplit(":", 1)[-1] if ":" in api else "5050"

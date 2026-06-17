@@ -62,6 +62,17 @@ and the page reloads with a walkthrough of what changed.
    landing in the wrong session's inbox. When running several projects at once,
    give each its own port and confirm `/info`'s `project_id` matches the page —
    never share 5050 across projects.
+
+   **Discover what's already running:** `python lib/server.py --list` prints every
+   live sidecar (id, port, dir, pid) from `~/.claude/cf-registry.json` — faster
+   than curling `/info` across a port range. Add `--auto-port` to grab the next
+   free port automatically (static mode only).
+
+   **Security:** the server binds `127.0.0.1` by default (localhost only). Only
+   pass `--host 0.0.0.0` to expose it (phone/LAN testing), and when you do, set a
+   token: `server.py --host 0.0.0.0 --token <secret>` + `inject.py --token
+   <secret>`. The page then sends `X-CF-Token`; posts without it get `401`. The
+   inbox drives source edits, so never expose it tokenless.
 4. **Start the sidecar** via Bash with `run_in_background: true`:
    ```
    python ~/.claude/skills/make-pages-interactive/lib/server.py <dir> --port <chosen>
@@ -79,14 +90,22 @@ and the page reloads with a walkthrough of what changed.
 ## Responding to a feedback batch
 
 When a new batch lands in `inbox.jsonl`:
-- Read the entry. Each comment carries `cf_id`, `selector`, `tag`, `id`, `text_snippet`, and truncated `outer_html` — enough to locate the region.
-- **Map rendered element → source.** This is the key framework skill: the comment describes the *rendered* DOM, but you edit the *source template*. Use `text_snippet` / `outer_html` / `id` to grep the source (`src/**`, components, content collections) for the matching markup. For repeated components, disambiguate with surrounding text and the user's comment. Never edit `_site/`, `dist/`, or `.next/`.
+- Read the entry. Each comment carries `cf_id`, `selector`, `tag`, `id`, `text_snippet`, truncated `outer_html`, and (for element comments) a `styles` object — enough to locate the region **and** act on visual feedback. The batch also carries `viewport` (`{width, height, label}`): when a comment is about layout ("this is broken", "too cramped"), fix the breakpoint named there.
+- **Comment types** — handle by `type`:
+  - `selection` / `elements` / `general` — the normal cases below.
+  - `reply` — carries `in_reply_to: "<ch-id>"`. This is a follow-up on a change you already made; find that change in `history.json`, re-open the same source region, and refine rather than starting fresh.
+  - `revert` — carries `target_commit` (and `target_batch_id`). Run `git revert --no-edit <target_commit>` (or otherwise undo that batch), then record the revert as its own history batch. Do not hand-re-edit; let git do it.
+- **Map rendered element → source.** This is the key framework skill: the comment describes the *rendered* DOM, but you edit the *source template*. Use `text_snippet` / `outer_html` / `id` / `styles` to grep the source (`src/**`, components, content collections) for the matching markup. For repeated components, disambiguate with surrounding text and the user's comment. Never edit `_site/`, `dist/`, or `.next/`.
+- **See it when the feedback is visual.** For "looks off / too big / wrong colour" comments, don't guess from markup — open the page in a browser (the `claude-in-chrome` tools), navigate to the comment's `selector`, and screenshot the element so you're editing against what the user actually sees. The `styles` object and `viewport` tell you the rendered size and breakpoint to check.
+- **Stuck or unsure? Write a note back.** If you can't action a comment (e.g. it points at a build-time asset) or need clarification ("the header or the hero?"), append to `<dir>/feedback/notes.json` — the page polls it and surfaces your note in the panel. Shape: `[{ "id": "n-<slug>", "type": "info|question|blocked", "text": "…", "in_reply_to": "<comment id, optional>" }]`. Use this instead of silently skipping a comment.
 - Make the edit in source. Wrap each changed region with `<span data-cf-change="ch-<slug>">…</span>` (or add `data-cf-change="ch-<slug>"` to an existing wrapping element) so the post-reload tour can find it. One anchor per change. (These attributes render through to output fine in `.njk`/`.astro`/`.jsx`.)
-- **Append** a batch object to `<dir>/feedback/history.json` (newest = last; the library walks from the end):
+- **Commit the batch.** After applying the edits, make one git commit (`feedback: <short batch summary>`) and capture its SHA. This gives the user one-click revert. Skip only if the project isn't a git repo.
+- **Append** a batch object to `<dir>/feedback/history.json` (newest = last; the library walks from the end). Include the commit SHA so the History tab can offer **⏪ revert**:
   ```json
   {
     "batch_id": "b-<timestamp-or-slug>",
     "timestamp": "<ISO 8601>",
+    "commit": "<git SHA of this batch, omit if not a git repo>",
     "comments": [ /* echo back the inbox comments you addressed */ ],
     "changes": [
       {

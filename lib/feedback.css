@@ -611,3 +611,45 @@ body.cf-elem-mode {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* ---------------- Agent → page notes (back-channel) ---------------- */
+.cf-notes {
+  padding: 8px 14px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cf-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid #b14000;
+  background: #fff7f2;
+}
+.cf-note-question { border-left-color: #b8860b; background: #fffaf0; }
+.cf-note-blocked  { border-left-color: #c0392b; background: #fdf0ee; }
+.cf-note-msg { flex: 1; color: #1a1a1a; }
+
+/* ---------------- Quick-reaction chips (editor) ---------------- */
+.cf-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.cf-chip {
+  background: #f3f3f3;
+  color: #333;
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.cf-chip:hover { background: #b14000; border-color: #b14000; color: #fff; }
